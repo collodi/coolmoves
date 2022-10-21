@@ -1,0 +1,4 @@
+/credentials.json
+/**/*.token
+/**/*.mp4
+/**/*.log
