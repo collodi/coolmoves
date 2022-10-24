@@ -7,7 +7,7 @@ from gphotospy import authorize
 from gphotospy.media import Media
 from gphotospy.album import Album
 
-TMP_FN = 'out.mp4'
+TMP_FN = 'tmpout'
 ALBUM_NAME = 'Cool Moves'
 CLIENT_SECRET_FILE = "credentials.json"
 
@@ -24,7 +24,51 @@ def find_format(formats, fid):
 		if x['format_id'] == fid:
 			return x
 
-def upload(file, desc):
+def readtime(ln):
+	s, e = ln.split()[1:]
+	s = max(0, time_to_sec(s) - 1)
+	e = time_to_sec(e)
+	return (s, e - s)
+
+def readfile(fn):
+	with open(fn) as f:
+		lns = [ln.strip() for ln in f]
+
+		link = lns[0]
+		univ_desc = []
+		times = []
+		descs = []
+
+		desc = []
+		for ln in lns[1:]:
+			if ln.startswith('--'):
+				if len(times) == 0:
+					univ_desc = '\n'.join(desc)
+				else:
+					descs.append('\n'.join(desc))
+
+				times.append(readtime(ln))
+				desc = []
+			else:
+				desc.append(ln)
+
+		descs.append('\n'.join(desc))
+
+		descs = [f'{univ_desc}\n{desc}' for desc in descs]
+
+		return link, times, descs
+
+def download(link, times, fn):
+	start, duration = times
+
+	ydl_opts = {}
+	with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+		result = ydl.extract_info(link, download=False)
+		url = find_format(result['formats'], '22')['url']
+
+		os.system(f'ffmpeg -y -ss {start} -i \'{url}\' -t {duration} -c:v copy -c:a copy {fn}')
+
+def upload(files, descs):
 	service = authorize.init(CLIENT_SECRET_FILE)
 
 	album_manager = Album(service)
@@ -39,31 +83,27 @@ def upload(file, desc):
 	if album_id is None:
 		album_id = album_manager.create(ALBUM_NAME).get('id')
 
-	media_manager.stage_media(file, desc)
+	for fn, d in zip(files, descs):
+		media_manager.stage_media(fn, d)
+
+	print('uploading cool moves')
 	media_manager.batchCreate(album_id)
 
 def main():
-	if len(sys.argv) < 4 or len(sys.argv) > 5:
-		print(f'usage: {sys.argv[0]} link start end [description]')
+	if len(sys.argv) != 2:
+		print(f'usage: {sys.argv[0]} <inputfile>')
 		return
 
-	link = sys.argv[1]
-	start = time_to_sec(sys.argv[2])
-	end = time_to_sec(sys.argv[3])
-	desc = sys.argv[4] if len(sys.argv) == 5 else ''
+	link, times, descs = readfile(sys.argv[1])
+	fns = [f'{TMP_FN}_{i}.mp4' for i in range(len(times))]
 
-	start = max(0, start - 1) # to compensate for cutoff at the start by ffmpeg
-	duration = end - start
+	for t, d, fn in zip(times, descs, fns):
+		download(link, t, fn)
 
-	ydl_opts = {}
-	with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-		result = ydl.extract_info(link, download=False)
-		url = find_format(result['formats'], '22')['url']
+	upload(fns, descs)
 
-		os.system(f'ffmpeg -y -ss {start} -i \'{url}\' -t {duration} -c:v copy -c:a copy {TMP_FN}')
-
-	# upload out.mp4 to album named Cool Moves
-	upload(TMP_FN, desc)
+	for fn in fns:
+		os.remove(fn)
 
 if __name__ == '__main__':
 	main()
