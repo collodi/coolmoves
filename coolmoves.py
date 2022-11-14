@@ -1,7 +1,10 @@
 from __future__ import unicode_literals
 
 import os
+import cv2
 import sys
+import time
+import itertools
 import youtube_dl
 from gphotospy import authorize
 from gphotospy.media import Media
@@ -30,43 +33,64 @@ def readtime(ln):
 	e = time_to_sec(e)
 	return (s, e - s)
 
+def get_snippets(lns):
+	snippets = []
+	seg = []
+	for ln in lns:
+		if ln.startswith('--'):
+			snippets.append(seg)
+			seg = []
+		else:
+			seg.append(ln)
+
+	snippets.append(seg)
+	return snippets
+
 def readfile(fn):
 	with open(fn) as f:
 		lns = [ln.strip() for ln in f]
 
-		link = lns[0]
-		univ_desc = []
-		times = []
-		descs = []
+		times = [readtime(ln) for ln in lns if ln.startswith('--')]
 
-		desc = []
-		for ln in lns[1:]:
-			if ln.startswith('--'):
-				if len(times) == 0:
-					univ_desc = '\n'.join(desc)
-				else:
-					descs.append('\n'.join(desc))
+		snippets = get_snippets(lns)
 
-				times.append(readtime(ln))
-				desc = []
+		# get universal description
+		univ_desc = '\n'.join(snippets[0])
+		snippets = snippets[1:]
+
+		# interpolate link if not exist in snippet
+		link = None
+		for snip in snippets:
+			if snip[0].startswith('http'):
+				link = snip[0]
 			else:
-				desc.append(ln)
+				snip.insert(0, link)
 
-		descs.append('\n'.join(desc))
+		links = [snip[0] for snip in snippets]
 
-		descs = [f'{univ_desc}\n{desc}' for desc in descs]
+		# get descriptions
+		descs = ['\n'.join(snip[1:]) for snip in snippets]
+		if len(univ_desc) > 0:
+			descs = [f'{univ_desc}\n{desc}' for desc in descs]
 
-		return link, times, descs
+		return links, times, descs
 
-def download(link, times, fn):
-	start, duration = times
-
+def get_url(link):
 	ydl_opts = {}
 	with youtube_dl.YoutubeDL(ydl_opts) as ydl:
 		result = ydl.extract_info(link, download=False)
-		url = find_format(result['formats'], '22')['url']
+		return find_format(result['formats'], '22')['url']
 
-		os.system(f'ffmpeg -y -ss {start} -i \'{url}\' -t {duration} -c:v copy -c:a copy {fn}')
+def get_urls(links):
+	link_set = set(links)
+	link_to_url = { link: get_url(link) for link in set(links) }
+	return [link_to_url[link] for link in links]
+
+def download(url, times, fn):
+	time.sleep(3)
+
+	start, duration = times
+	os.system(f'ffmpeg -y -ss {start} -i \'{url}\' -t {duration} -c:v copy -c:a copy {fn}')
 
 def upload(files, descs):
 	service = authorize.init(CLIENT_SECRET_FILE)
@@ -89,21 +113,58 @@ def upload(files, descs):
 	print('uploading cool moves')
 	media_manager.batchCreate(album_id)
 
+def all_files_downloaded(fns):
+	for fn in fns:
+		if not file_downloaded(fn):
+			return False
+
+	return True
+
+def file_downloaded(fn):
+	if not os.path.exists(fn):
+		return False
+
+	vid = cv2.VideoCapture(fn)
+	if vid.get(cv2.CAP_PROP_FRAME_COUNT) == 0:
+		return False
+
+	return True
+
 def main():
 	if len(sys.argv) != 2:
 		print(f'usage: {sys.argv[0]} <inputfile>')
 		return
 
-	link, times, descs = readfile(sys.argv[1])
+	links, times, descs = readfile(sys.argv[1])
+	#urls = get_urls(links)
 	fns = [f'{TMP_FN}_{i}.mp4' for i in range(len(times))]
 
-	for t, d, fn in zip(times, descs, fns):
-		download(link, t, fn)
+	for desc in descs:
+		print(desc)
 
+	return
+
+	for url, time, desc, fn in zip(urls, times, descs, fns):
+		print(f'--- {fn}')
+		print(time[1], 'secs')
+		print(desc)
+		download(url, time, fn)
+
+	while not all_files_downloaded(fns):
+		for url, time, desc, fn in zip(urls, times, descs, fns):
+			if file_downloaded(fn):
+				continue
+
+			print(f'--- retrying {fn}')
+			print(time[1], 'secs')
+			print(desc)
+			download(url, time, fn)
+
+	print('uploading')
 	upload(fns, descs)
 
-	for fn in fns:
-		os.remove(fn)
+#	for fn in fns:
+#		os.remove(fn)
 
 if __name__ == '__main__':
 	main()
