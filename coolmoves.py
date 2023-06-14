@@ -4,8 +4,7 @@ import os
 import cv2
 import sys
 import time
-import itertools
-import youtube_dl
+import yt_dlp
 from gphotospy import authorize
 from gphotospy.media import Media
 from gphotospy.album import Album
@@ -77,12 +76,11 @@ def readfile(fn):
 
 def get_url(link):
 	ydl_opts = {}
-	with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+	with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 		result = ydl.extract_info(link, download=False)
 		return find_format(result['formats'], '22')['url']
 
 def get_urls(links):
-	link_set = set(links)
 	link_to_url = { link: get_url(link) for link in set(links) }
 	return [link_to_url[link] for link in links]
 
@@ -136,13 +134,8 @@ def main():
 		return
 
 	links, times, descs = readfile(sys.argv[1])
-	#urls = get_urls(links)
+	urls = get_urls(links)
 	fns = [f'{TMP_FN}_{i}.mp4' for i in range(len(times))]
-
-	for desc in descs:
-		print(desc)
-
-	return
 
 	for url, time, desc, fn in zip(urls, times, descs, fns):
 		print(f'--- {fn}')
@@ -163,8 +156,8 @@ def main():
 	print('uploading')
 	upload(fns, descs)
 
-#	for fn in fns:
-#		os.remove(fn)
+	for fn in fns:
+		os.remove(fn)
 
 if __name__ == '__main__':
 	main()
